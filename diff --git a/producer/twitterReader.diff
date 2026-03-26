@@ -1,0 +1,304 @@
+diff --git a/producer/twitterReader.py b/producer/twitterReader.py
+new file mode 100644
+--- /dev/null
++++ b/producer/twitterReader.py
+@@ -0,0 +1,40 @@
++import json
++import socket
++import time
++
++import kafka
++import tweepy
++from kafka import KafkaProducer
++from transformers import pipeline
++from tweepy import OAuthHandler, Stream
++import os
++
++api_key = os.getenv("TWITTER_API_KEY")
++
++
++client = tweepy.Client(bearer_token, consumer_key, consumer_secret_key, access_token, access_token_secret)
++
++auth = tweepy.OAuth1UserHandler(consumer_key, consumer_secret_key, access_token, access_token_secret)
++api = tweepy.API(auth)
++
++
++search_terms = ["war", "russia", "ukraine"]
++
++
++class TweetsStreams(tweepy.StreamingClient):
++       
++    def on_tweet(self,tweet):
++        producer.send("tweets_ukr",tweet.text.encode('utf-8'))
++        print(tweet.text)
++        time.sleep(0.5)
++        return True
++
++if __name__ == "__main__":
++    producer = KafkaProducer(bootstrap_servers=['localhost:9092'])
++    #classifier = pipeline('sentiment-analysis')
++    stream = TweetsStreams(bearer_token=bearer_token)
++
++    for term in search_terms:
++        stream.add_rules(tweepy.StreamRule(term))
++
++    stream.filter(tweet_fields=["referenced_tweets"])
+\ No newline at end of filediff --git a/twitterReader.py b/twitterReader.py
+deleted file mode 100644
+--- a/twitterReader.py
++++ /dev/null
+@@ -1,41 +0,0 @@
+-import json
+-import socket
+-import time
+-
+-import kafka
+-import tweepy
+-from kafka import KafkaProducer
+-from transformers import pipeline
+-from tweepy import OAuthHandler, Stream
+-
+-consumer_key="2n4nJi0ceJyTCpUXWVfaNrm9e"
+-consumer_secret_key="C14AZR2ywm8IGo6AG3HFVv1HpBVDROPOIixpJEFUUpQrrrIHSF"
+-access_token="1591993996372578305-OqY5MUm1PtyvfkZNAqxT7PDEgB5pwh"
+-access_token_secret="2u4UAstWkCGdh0NJDkZIAHDnnXtCW4tquVlXDL1DJ5MoP"
+-bearer_token="AAAAAAAAAAAAAAAAAAAAAHJHjQEAAAAAVw2IfdzQlrX7PUzbmRsofnPXyyc%3D5agRGG1ou6adpyCqRlpkOCYNSe77iTdRowoXYBF7WpAk5jwp4H"
+-
+-client = tweepy.Client(bearer_token, consumer_key, consumer_secret_key, access_token, access_token_secret)
+-
+-auth = tweepy.OAuth1UserHandler(consumer_key, consumer_secret_key, access_token, access_token_secret)
+-api = tweepy.API(auth)
+-
+-
+-search_terms = ["war", "russia", "ukraine"]
+-
+-
+-class TweetsStreams(tweepy.StreamingClient):
+-       
+-    def on_tweet(self,tweet):
+-        producer.send("tweets_ukr",tweet.text.encode('utf-8'))
+-        print(tweet.text)
+-        time.sleep(0.5)
+-        return True
+-
+-if __name__ == "__main__":
+-    producer = KafkaProducer(bootstrap_servers=['localhost:9092'])
+-    #classifier = pipeline('sentiment-analysis')
+-    stream = TweetsStreams(bearer_token=bearer_token)
+-
+-    for term in search_terms:
+-        stream.add_rules(tweepy.StreamRule(term))
+-
+-    stream.filter(tweet_fields=["referenced_tweets"])diff --git a/producer/producer.dockerfile b/producer/producer.dockerfile
+new file mode 100644
+--- /dev/null
++++ b/producer/producer.dockerfile
+@@ -0,0 +1,8 @@
++FROM python:3.9-slim
++
++WORKDIR /app
++COPY . .
++
++RUN pip install tweepy kafka-python
++
++CMD ["python", "twitterReader.py"]
+\ No newline at end of filediff --git a/consumer/kafkaConsumer.py b/consumer/kafkaConsumer.py
+new file mode 100644
+--- /dev/null
++++ b/consumer/kafkaConsumer.py
+@@ -0,0 +1,35 @@
++from elasticsearch import Elasticsearch
++from kafka import KafkaConsumer
++import json
++from textblob import TextBlob
++import re 
++#elasticSearch = Elasticsearch(hosts=['localhost'], port= '9200',scheme='https')
++elasticSearch = Elasticsearch("http://localhost:9200")
++
++if __name__ == "__main__":
++   
++    search_terms = ["war", "russia", "ukraine"]
++    
++    consumer=KafkaConsumer("tweets_ukr", auto_offset_reset='latest')
++    
++    for line in consumer:
++        print(line)
++       # dict_data = json.loads(line.value)
++        sentence=str(line.value)
++        tweet = TextBlob(sentence)
++        sentiment = tweet.sentiment.polarity
++        tweet_sentiment = ""
++        print("sentiment", sentiment)    
++        if sentiment>0: tweet_sentiment='positive'
++        elif sentiment<0: tweet_sentiment='negative'
++        elif sentiment==0: tweet_sentiment='neutral'
++        
++        elasticSearch.index(
++            index="tweets_ukr",
++            document={
++                "message":sentence,
++                "sentiment":tweet_sentiment
++            }
++            
++        )
++        
+\ No newline at end of filediff --git a/kafkaConsumer.py b/kafkaConsumer.py
+deleted file mode 100644
+--- a/kafkaConsumer.py
++++ /dev/null
+@@ -1,34 +0,0 @@
+-from elasticsearch import Elasticsearch
+-from kafka import KafkaConsumer
+-import json
+-from textblob import TextBlob
+-import re 
+-#elasticSearch = Elasticsearch(hosts=['localhost'], port= '9200',scheme='https')
+-elasticSearch = Elasticsearch("http://localhost:9200")
+-
+-if __name__ == "__main__":
+-   
+-    search_terms = ["war", "russia", "ukraine"]
+-    
+-    consumer=KafkaConsumer("tweets_ukr", auto_offset_reset='latest')
+-    
+-    for line in consumer:
+-        print(line)
+-       # dict_data = json.loads(line.value)
+-        sentence=str(line.value)
+-        tweet = TextBlob(sentence)
+-        sentiment = tweet.sentiment.polarity
+-        tweet_sentiment = ""
+-        print("sentiment", sentiment)    
+-        if sentiment>0: tweet_sentiment='positive'
+-        elif sentiment<0: tweet_sentiment='negative'
+-        elif sentiment==0: tweet_sentiment='neutral'
+-        
+-        elasticSearch.index(
+-            index="tweets_ukr",
+-            document={
+-                "message":sentence,
+-                "sentiment":tweet_sentiment
+-            }
+-            
+-        )
+-        diff --git a/consumer/consumer.dockerfile b/consumer/consumer.dockerfile
+new file mode 100644
+--- /dev/null
++++ b/consumer/consumer.dockerfile
+@@ -0,0 +1,8 @@
++FROM python:3.9-slim
++
++WORKDIR /app
++COPY . .
++
++RUN pip install tweepy kafka-python
++
++CMD ["python", "twitterReader.py"]
+\ No newline at end of filediff --git a/logstash/logstash.conf b/logstash/logstash.conf
+new file mode 100644
+--- /dev/null
++++ b/logstash/logstash.conf
+@@ -0,0 +1,18 @@
++input {
++
++
++  kafka {
++      bootstrap_servers => ["localhost:9092"]
++      topics => ["tweets_ukr"]
++  }
++
++}
++
++output {
++  elasticsearch { 
++    hosts => ["localhost:9200"]
++    index => "tweets_ukr"
++   }
++  stdout { codec => rubydebug }
++}
+diff --git a/.env b/.env
+new file mode 100644
+--- /dev/null
++++ b/.env
+@@ -0,0 +1,12 @@
++TWITTER_API_KEY=xxx
++TWITTER_API_SECRET=xxx
++TWITTER_ACCESS_TOKEN=xxx
++TWITTER_ACCESS_SECRET=xxx
++
++
++consumer_key="2n4nJi0ceJyTCpUXWVfaNrm9e"
++consumer_secret_key="C14AZR2ywm8IGo6AG3HFVv1HpBVDROPOIixpJEFUUpQrrrIHSF"
++access_token="1591993996372578305-OqY5MUm1PtyvfkZNAqxT7PDEgB5pwh"
++access_token_secret="2u4UAstWkCGdh0NJDkZIAHDnnXtCW4tquVlXDL1DJ5MoP"
++bearer_token="AAAAAAAAAAAAAAAAAAAAAHJHjQEAAAAAVw2IfdzQlrX7PUzbmRsofnPXyyc%3D5agRGG1ou6adpyCqRlpkOCYNSe77iTdRowoXYBF7WpAk5jwp4H"
+diff --git a/producer/requirements.txt b/producer/requirements.txt
+new file mode 100644
+--- /dev/null
++++ b/producer/requirements.txt
+@@ -0,0 +1,3 @@
++tweepy
++kafka-python
++python-dotenv
+\ No newline at end of filediff --git a/consumer/requirements.txt b/consumer/requirements.txt
+new file mode 100644
+--- /dev/null
++++ b/consumer/requirements.txt
+@@ -0,0 +1,4 @@
++kafka-python
++elasticsearch
++textblob
++python-dotenv
+\ No newline at end of filediff --git a/docker-compose.yml b/docker-compose.yml
+new file mode 100644
+--- /dev/null
++++ b/docker-compose.yml
+@@ -0,0 +1,47 @@
++version: '3.8'
++
++services:
++
++  zookeeper:
++    image: bitnami/zookeeper:latest
++    environment:
++      - ALLOW_ANONYMOUS_LOGIN=yes
++
++  kafka:
++    image: bitnami/kafka:latest
++    ports:
++      - "9092:9092"
++    environment:
++      - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
++      - ALLOW_PLAINTEXT_LISTENER=yes
++    depends_on:
++      - zookeeper
++
++  elasticsearch:
++    image: docker.elastic.co/elasticsearch/elasticsearch:8.5.0
++    environment:
++      - discovery.type=single-node
++    ports:
++      - "9200:9200"
++
++  kibana:
++    image: docker.elastic.co/kibana/kibana:8.5.0
++    ports:
++      - "5601:5601"
++    depends_on:
++      - elasticsearch
++
++  producer:
++    build: ./producer
++    env_file:
++      - .env
++    depends_on:
++      - kafka
++
++  consumer:
++    build: ./consumer
++    env_file:
++      - .env
++    depends_on:
++      - kafka
++      - elasticsearch
+\ No newline at end of file
